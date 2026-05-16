@@ -1,0 +1,22 @@
+# Default to LF line endings in the repo.
+* text=auto eol=lf
+
+# Shell scripts must be LF for macOS / Linux.
+*.sh        text eol=lf
+
+# Windows-only files keep CRLF on checkout.
+*.ps1       text eol=crlf
+*.psm1      text eol=crlf
+*.iss       text eol=crlf
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# Binary assets.
+*.ico       binary
+*.icns      binary
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.dmg       binary
+*.exe       binary
+*.zip       binary
