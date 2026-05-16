@@ -32,7 +32,6 @@
 
 ## v1.2+ candidates (unprioritized)
 
-- **Repo cleanup.** Inline the `Recorder` class from `voice_notes_v3/core/audio.py` so the OSS repo is fully self-contained, drop the `voice_notes_v3/` subpackage from the public repo.
 - **Linux support.** Add a Linux paste path (X11 / Wayland) and a `.AppImage` build.
 - **Configurable hotkey UI.** Replace the `VN_LITE_HOTKEY` env var with a settings dialog that captures keypresses.
 - **System tray icon.** Hide-to-tray when minimized so hotkey still works without a visible window.

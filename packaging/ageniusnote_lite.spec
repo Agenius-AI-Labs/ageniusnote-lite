@@ -28,7 +28,7 @@ entry = str(app_dir / "voice_notes_lite.py")
 icon_path = str(app_dir / "assets" / ("icon.icns" if IS_MAC else "icon.ico"))
 
 datas = [
-    (str(app_dir / "voice_notes_v3" / "assets"), "assets"),
+    (str(app_dir / "assets"), "assets"),
 ]
 
 hiddenimports = []

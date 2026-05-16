@@ -2,7 +2,7 @@
 
 No wake word, no LLM parsing, no database. Pure faster-whisper transcribe with
 a clipboard handoff so it drops text into VSCode / Cursor / anywhere the OS
-focus is. Reuses `voice_notes_v3.core.audio.Recorder` for capture.
+focus is.
 
 Run:
     python apps/voice-notes-desktop/voice_notes_lite.py
