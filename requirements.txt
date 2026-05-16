@@ -1,0 +1,6 @@
+faster-whisper>=1.0
+numpy
+pynput
+PySide6>=6.6,<6.9
+sounddevice
+soundfile

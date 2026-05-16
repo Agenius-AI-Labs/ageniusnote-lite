@@ -1,0 +1,24 @@
+# Local runtime artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# SQLite working files (per-user state, regenerated on first run)
+voice_notes.db
+voice_notes.db-shm
+voice_notes.db-wal
+
+# Generated icon PNG preview (kept in tree); ico is source of truth for shortcut
+# Keep both for now.
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+
+# PyInstaller / Inno Setup build artifacts
+build/
+build-*/
+dist/
+dist-*/
+*.spec.bak
+

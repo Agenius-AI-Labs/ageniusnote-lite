@@ -1,0 +1,138 @@
+name: Build and release AgeniusNote Lite
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $v = $env:GITHUB_REF.Substring('refs/tags/v'.Length)
+          } elseif ($env:INPUT_VERSION) {
+            $v = $env:INPUT_VERSION
+          } else {
+            $v = (Get-Content packaging/VERSION -Raw).Trim()
+          }
+          Write-Host "Version: $v"
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build PyInstaller bundle
+        run: python -m PyInstaller packaging/ageniusnote_lite.spec --noconfirm --clean --distpath dist-build --workpath build-build
+
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          $version = "${{ steps.ver.outputs.version }}"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "/DSrcDir=..\dist-build\AgeniusNoteLite" "/DOutDir=..\dist-build\installer" "packaging/installer.iss"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgeniusNoteLite-Windows
+          path: dist-build/installer/*.exe
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-build/installer/*.exe
+          name: AgeniusNote Lite v${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF#refs/tags/v}"
+          elif [[ -n "${INPUT_VERSION:-}" ]]; then
+            v="$INPUT_VERSION"
+          else
+            v="$(tr -d '[:space:]' < packaging/VERSION)"
+          fi
+          echo "Version: $v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Build .app + .dmg
+        run: |
+          chmod +x packaging/build.sh
+          PYTHON=python ./packaging/build.sh "${{ steps.ver.outputs.version }}"
+
+      - name: Locate DMG
+        id: dmg
+        run: |
+          dmg="$(ls dist-build-mac-*/*.dmg | head -1)"
+          echo "Built: $dmg"
+          echo "path=$dmg" >> "$GITHUB_OUTPUT"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgeniusNoteLite-macOS
+          path: dist-build-mac-*/*.dmg
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.dmg.outputs.path }}
+          name: AgeniusNote Lite v${{ steps.ver.outputs.version }}
+          generate_release_notes: true
