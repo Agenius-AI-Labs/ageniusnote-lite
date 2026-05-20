@@ -20,10 +20,9 @@ Grab the latest release from the [Releases](https://github.com/Agenius-AI-Labs/a
 
 ### macOS
 
-1. Download the right DMG for your Mac:
+1. Download the DMG for your Mac:
    - **Apple Silicon (M1/M2/M3/M4):** `AgeniusNoteLite-Setup-x.y.z-arm64.dmg`
-   - **Intel:** `AgeniusNoteLite-Setup-x.y.z-x86_64.dmg`
-   - Not sure which you have? Apple menu → About This Mac. "Apple M..." = arm64. "Intel" = x86_64.
+   - **Intel:** see [CHANGELOG.md](CHANGELOG.md) under v1.0.1 "Known limitations". The Intel build path is wired and ready; the DMG will be attached to the v1.0.1 release page as soon as a GitHub Actions Intel runner becomes available. If you need Intel sooner, build from source (see below) or file an issue.
 2. Open the DMG, drag `AgeniusNote Lite.app` into `Applications`.
 3. **First launch:** the v1 release is not yet code-signed, so macOS Gatekeeper will block it. Right-click → Open (don't double-click) the first time, click **Open** in the dialog. Or run once from Terminal: `xattr -d com.apple.quarantine "/Applications/AgeniusNote Lite.app"`.
 4. First time you trigger the hotkey, macOS will ask for **Accessibility**, **Input Monitoring**, and **Microphone** permissions. Grant all three in System Settings → Privacy & Security. The app reads no data, but the OS requires explicit permission for global hotkeys and microphone access.
