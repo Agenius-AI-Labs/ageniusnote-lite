@@ -4,6 +4,16 @@ All notable changes to AgeniusNote Lite are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-05-20
+
+### Fixed
+- **In-app version label drift.** The window title was hardcoded to "1.0.0" even after the package bumped to 1.0.1, which made support triage confusing. The version is now read at runtime from `packaging/VERSION`, bundled into the PyInstaller `.app` / installer payload so frozen mode resolves correctly.
+- **`build.ps1 -SkipBuild` and `build.sh SKIP_BUILD=1` are no longer broken.** Both scripts used to allocate a fresh timestamped output directory even when re-running just the installer/DMG step, so the packaging tools would point at an empty path. They now reuse the most recent `dist-build-*` (Win) or `dist-build-mac-*` (macOS) directory that contains a built bundle.
+- **`scripts/build_icon.py`** now writes generated icons to `<repo_root>/assets/`. Previously it wrote to `voice_notes_v3/assets/`, a monorepo-only path that does not exist in this OSS repo, so re-running the script silently produced files that nobody saw.
+
+### Changed
+- Top-of-file docstring in `voice_notes_lite.py` corrected: the default hotkey is `Ctrl+Alt+M`, not `Ctrl+Alt+Space`.
+
 ## [1.0.1] - 2026-05-20
 
 ### Fixed
@@ -33,5 +43,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 - macOS DMG with Gatekeeper-friendly first-launch instructions.
 - Cyberpunk theme.
 
+[1.0.2]: https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.2
 [1.0.1]: https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.1
 [1.0.0]: https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.0
