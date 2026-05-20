@@ -7,7 +7,7 @@ focus is.
 Run:
     python apps/voice-notes-desktop/voice_notes_lite.py
 
-Global hotkey (default Ctrl+Alt+Space) toggles record without stealing focus,
+Global hotkey (default Ctrl+Alt+M) toggles record without stealing focus,
 so the transcribed text auto-pastes into the previously focused window.
 The in-window mic button is the manual mode: it records, transcribes,
 copies, and leaves you to paste yourself.
@@ -86,7 +86,34 @@ DEFAULT_HOTKEY = os.environ.get("VN_LITE_HOTKEY", "<ctrl>+<alt>+m")
 DEFAULT_DEVICE = (os.environ.get("VN_LITE_DEVICE", "cpu") or "cpu").strip().lower()
 if DEFAULT_DEVICE not in {"cpu", "cuda", "auto"}:
     DEFAULT_DEVICE = "cpu"
-APP_VERSION = "1.0.0"
+
+
+def _read_app_version() -> str:
+    """Read app version from packaging/VERSION.
+
+    Works in both dev (file lives at repo_root/packaging/VERSION) and frozen
+    PyInstaller mode (file is bundled into the app via the spec's `datas`).
+    Returns "0.0.0" if the file cannot be located, so a missing-file bug never
+    crashes the UI.
+    """
+    candidates = [
+        # Frozen mode: PyInstaller unpacks data files relative to sys._MEIPASS.
+        Path(getattr(sys, "_MEIPASS", _APP_DIR)) / "packaging" / "VERSION",
+        # Dev mode: source tree has packaging/ next to this file.
+        _APP_DIR / "packaging" / "VERSION",
+    ]
+    for path in candidates:
+        try:
+            if path.is_file():
+                value = path.read_text(encoding="utf-8").strip()
+                if value:
+                    return value
+        except OSError:
+            continue
+    return "0.0.0"
+
+
+APP_VERSION = _read_app_version()
 
 
 def _resource_path(relative: str) -> Path:

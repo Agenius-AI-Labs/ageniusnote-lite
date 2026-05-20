@@ -37,6 +37,9 @@ icon_path = str(app_dir / "assets" / ("icon.icns" if IS_MAC else "icon.ico"))
 
 datas = [
     (str(app_dir / "assets"), "assets"),
+    # Ship VERSION inside the bundle so APP_VERSION reads it at runtime
+    # (no more hardcoded version-label drift).
+    (str(app_dir / "packaging" / "VERSION"), "packaging"),
     # Required by faster-whisper VAD at runtime.
     *collect_data_files("faster_whisper", includes=["assets/*.onnx"]),
 ]

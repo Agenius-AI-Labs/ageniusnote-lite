@@ -61,12 +61,27 @@ if (-not $Python) {
 if (-not $Python) { throw "No Python interpreter found." }
 Write-Host ">> Using Python: $Python" -ForegroundColor Cyan
 
-# Use a fresh timestamped build path each run so locked previous-build dirs
-# (Windows Defender / Syncthing scanners) never block PyInstaller's rmtree.
-$Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$DistPath = "dist-build-$Stamp"
-$WorkPath = "build-build-$Stamp"
-Write-Host ">> Build path: $DistPath" -ForegroundColor Cyan
+if ($SkipBuild) {
+    # Reuse the most recent existing dist-build-* dir so re-running just the
+    # Inno Setup step actually packages a previously built bundle.
+    $existing = Get-ChildItem -Directory -Filter "dist-build-*" -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path (Join-Path $_.FullName "AgeniusNoteLite") } |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+    if (-not $existing) {
+        throw "SkipBuild requested but no existing dist-build-*\AgeniusNoteLite dir found. Run a full build first."
+    }
+    $DistPath = $existing.Name
+    $WorkPath = ""  # not used when skipping PyInstaller
+    Write-Host ">> Reusing existing build path: $DistPath" -ForegroundColor Yellow
+} else {
+    # Use a fresh timestamped build path each run so locked previous-build dirs
+    # (Windows Defender / Syncthing scanners) never block PyInstaller's rmtree.
+    $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $DistPath = "dist-build-$Stamp"
+    $WorkPath = "build-build-$Stamp"
+    Write-Host ">> Build path: $DistPath" -ForegroundColor Cyan
+}
 
 # --- 1. PyInstaller ---
 if (-not $SkipBuild) {

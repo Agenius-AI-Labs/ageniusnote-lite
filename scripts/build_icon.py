@@ -148,7 +148,10 @@ def make_mic_glyph(size: int = 192, color: tuple = ACCENT) -> Image.Image:
 
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    out_dir = repo_root / "voice_notes_v3" / "assets"
+    # Lite ships icons from <repo_root>/assets/ (used by both the PyInstaller
+    # spec and Inno Setup). The original script wrote to voice_notes_v3/assets,
+    # a monorepo-only path that doesn't exist in the public OSS repo.
+    out_dir = repo_root / "assets"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     big = make_icon(512)

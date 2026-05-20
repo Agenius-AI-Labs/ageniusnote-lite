@@ -23,9 +23,24 @@ else
     VERSION="$(tr -d '[:space:]' < packaging/VERSION)"
 fi
 
-STAMP="$(date +%Y%m%d-%H%M%S)"
-DIST="dist-build-mac-${STAMP}"
-WORK="build-build-mac-${STAMP}"
+if [[ -n "${SKIP_BUILD:-}" ]]; then
+    # Reuse the most recent existing dist-build-mac-* dir that actually has the
+    # built .app inside, so re-running just the .dmg step works.
+    DIST="$(ls -td dist-build-mac-*/ 2>/dev/null | while read -r d; do
+        d="${d%/}"
+        [[ -d "${d}/AgeniusNote Lite.app" ]] && { echo "$d"; break; }
+    done)"
+    if [[ -z "$DIST" ]]; then
+        echo "ERROR: SKIP_BUILD=1 set but no existing dist-build-mac-*/AgeniusNote Lite.app found. Run a full build first." >&2
+        exit 1
+    fi
+    WORK=""  # unused when skipping PyInstaller
+    echo ">> Reusing existing build path: ${DIST}"
+else
+    STAMP="$(date +%Y%m%d-%H%M%S)"
+    DIST="dist-build-mac-${STAMP}"
+    WORK="build-build-mac-${STAMP}"
+fi
 
 echo ">> Building AgeniusNote Lite v${VERSION}"
 echo ">> Output: ${DIST}"
