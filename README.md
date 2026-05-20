@@ -4,8 +4,7 @@ Tiny, fast, offline voice-to-text for Windows and macOS. Press a hotkey, talk, y
 
 Made by [Agenius AI Labs](https://ageniusailabs.com).
 
-<!-- HERO_SCREENSHOT -->
-<!-- Screenshot of the AgeniusNote Lite window in recording state goes here once captured. See docs/screenshots/. -->
+![AgeniusNote Lite — minimal, hotkey-driven, fully local dictation](docs/screenshots/hero.png)
 
 ## Install
 
