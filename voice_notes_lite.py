@@ -83,6 +83,9 @@ class Recorder:
 
 DEFAULT_MODEL = os.environ.get("VN_LITE_MODEL", "base.en")
 DEFAULT_HOTKEY = os.environ.get("VN_LITE_HOTKEY", "<ctrl>+<alt>+m")
+DEFAULT_DEVICE = (os.environ.get("VN_LITE_DEVICE", "cpu") or "cpu").strip().lower()
+if DEFAULT_DEVICE not in {"cpu", "cuda", "auto"}:
+    DEFAULT_DEVICE = "cpu"
 APP_VERSION = "1.0.0"
 
 
@@ -94,41 +97,80 @@ def _resource_path(relative: str) -> Path:
 
 # ---------- DB-free faster-whisper wrapper ----------
 
-_WHISPER_CACHE: dict = {"model": None, "name": "", "device": "", "compute": ""}
+_WHISPER_CACHE: dict = {"model": None, "name": "", "pref": "", "device": "", "compute": ""}
 
 
-def _build_model(model_name: str):
+def _build_model(model_name: str, device_pref: str):
     from faster_whisper import WhisperModel
-    try:
-        return WhisperModel(model_name, device="cuda", compute_type="float16"), "cuda", "float16"
-    except Exception:
-        return WhisperModel(model_name, device="cpu", compute_type="int8"), "cpu", "int8"
+    pref = (device_pref or "cpu").lower()
+    if pref == "cuda":
+        try:
+            return WhisperModel(model_name, device="cuda", compute_type="float16"), "cuda", "float16"
+        except Exception:
+            return WhisperModel(model_name, device="cpu", compute_type="int8"), "cpu", "int8"
+    if pref == "auto":
+        try:
+            return WhisperModel(model_name, device="cuda", compute_type="float16"), "cuda", "float16"
+        except Exception:
+            return WhisperModel(model_name, device="cpu", compute_type="int8"), "cpu", "int8"
+    return WhisperModel(model_name, device="cpu", compute_type="int8"), "cpu", "int8"
 
 
-def _get_model(model_name: str):
-    if _WHISPER_CACHE["model"] is None or _WHISPER_CACHE["name"] != model_name:
-        model, device, compute = _build_model(model_name)
-        _WHISPER_CACHE.update(model=model, name=model_name, device=device, compute=compute)
+def _get_model(model_name: str, device_pref: str):
+    pref = (device_pref or "cpu").lower()
+    if pref not in {"cpu", "cuda", "auto"}:
+        pref = "cpu"
+    if (
+        _WHISPER_CACHE["model"] is None
+        or _WHISPER_CACHE["name"] != model_name
+        or _WHISPER_CACHE["pref"] != pref
+    ):
+        model, device, compute = _build_model(model_name, pref)
+        _WHISPER_CACHE.update(
+            model=model,
+            name=model_name,
+            pref=pref,
+            device=device,
+            compute=compute,
+        )
     return _WHISPER_CACHE["model"]
 
 
-def transcribe(wav_bytes: bytes, model_name: str = DEFAULT_MODEL) -> tuple[str, dict]:
+def _run_transcribe(model, wav_path: str) -> str:
+    try:
+        segments, _info = model.transcribe(
+            wav_path,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+        )
+    except TypeError:
+        segments, _info = model.transcribe(wav_path)
+    return " ".join(s.text.strip() for s in segments).strip()
+
+
+def transcribe(
+    wav_bytes: bytes,
+    model_name: str = DEFAULT_MODEL,
+    device_pref: str = DEFAULT_DEVICE,
+) -> tuple[str, dict]:
     import tempfile
     started = time.perf_counter()
-    model = _get_model(model_name)
+    model = _get_model(model_name, device_pref)
+    fallback_reason: str | None = None
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
         tmp.write(wav_bytes)
         tmp_path = tmp.name
     try:
         try:
-            segments, _info = model.transcribe(
-                tmp_path,
-                vad_filter=True,
-                vad_parameters={"min_silence_duration_ms": 500},
-            )
-        except TypeError:
-            segments, _info = model.transcribe(tmp_path)
-        text = " ".join(s.text.strip() for s in segments).strip()
+            text = _run_transcribe(model, tmp_path)
+        except Exception as exc:
+            if _WHISPER_CACHE["device"] != "cuda":
+                raise
+            # CUDA DLL loading can fail at first transcribe() even when model
+            # construction appeared to succeed. Retry once on CPU.
+            fallback_reason = f"{type(exc).__name__}: {exc}"
+            model = _get_model(model_name, "cpu")
+            text = _run_transcribe(model, tmp_path)
     finally:
         try:
             os.remove(tmp_path)
@@ -139,6 +181,8 @@ def transcribe(wav_bytes: bytes, model_name: str = DEFAULT_MODEL) -> tuple[str, 
         "compute": _WHISPER_CACHE["compute"],
         "elapsed_ms": int((time.perf_counter() - started) * 1000),
         "model": model_name,
+        "device_pref": device_pref,
+        "fallback_reason": fallback_reason,
     }
     return text, meta
 
@@ -149,16 +193,24 @@ class TranscribeWorker(QThread):
     finished_text = Signal(str, dict)
     failed = Signal(str)
 
-    def __init__(self, wav: bytes, paste_after: bool, model_name: str, target_handle: object | None):
+    def __init__(
+        self,
+        wav: bytes,
+        paste_after: bool,
+        model_name: str,
+        device_pref: str,
+        target_handle: object | None,
+    ):
         super().__init__()
         self.wav = wav
         self.paste_after = paste_after
         self.model_name = model_name
+        self.device_pref = device_pref
         self.target_handle = target_handle
 
     def run(self) -> None:
         try:
-            text, meta = transcribe(self.wav, self.model_name)
+            text, meta = transcribe(self.wav, self.model_name, self.device_pref)
             meta["paste_after"] = self.paste_after
             meta["target_handle"] = self.target_handle
             self.finished_text.emit(text, meta)
@@ -451,11 +503,25 @@ QPushButton#pasteToggle[on="true"]:hover {
     background-color: rgba(52, 211, 153, 0.12);
     border-color: rgba(52, 211, 153, 0.70);
 }
+
+QPushButton#collapse {
+    padding: 4px 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: #7ea8cc;
+    border-color: rgba(255, 255, 255, 0.08);
+}
+QPushButton#collapse:hover {
+    color: #d4e3f5;
+    border-color: rgba(56, 189, 248, 0.50);
+}
 """
 
 
 class LiteWindow(QWidget):
-    def __init__(self, hotkey_combo: str, model_name: str):
+    _preload_done = Signal(bool, str)  # (ok, message)
+
+    def __init__(self, hotkey_combo: str, model_name: str, device_pref: str):
         super().__init__()
         self.setObjectName("root")
         self.setWindowTitle("AgeniusNote Lite")
@@ -467,6 +533,7 @@ class LiteWindow(QWidget):
             self.setWindowIcon(QIcon(str(icon_path)))
 
         self.model_name = model_name
+        self.device_pref = (device_pref or "cpu").lower()
         self.hotkey_combo = hotkey_combo
         self.recorder: Recorder | None = None
         self.recording = False
@@ -525,27 +592,40 @@ class LiteWindow(QWidget):
         self.btn_paste_toggle.setChecked(True)
         self.btn_paste_toggle.clicked.connect(self._toggle_paste)
 
+        # Collapse / expand toggle. Collapsed shows just the status line + this
+        # button row, so the always-on-top window is minimally invasive.
+        self.btn_collapse = QPushButton("–")
+        self.btn_collapse.setObjectName("collapse")
+        self.btn_collapse.setToolTip("Collapse to mini bar")
+        self.btn_collapse.setFixedWidth(28)
+        self.btn_collapse.clicked.connect(self._toggle_collapse)
+
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.btn_record)
         btn_row.addWidget(self.btn_copy)
         btn_row.addWidget(self.btn_clear)
         btn_row.addStretch(1)
         btn_row.addWidget(self.btn_paste_toggle)
+        btn_row.addWidget(self.btn_collapse)
 
         # Layout — header strip stretches edge-to-edge, body has padding
+        self.header = header
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        root.addWidget(header)
+        root.addWidget(self.header)
         body = QVBoxLayout()
         body.setContentsMargins(12, 10, 12, 12)
         body.setSpacing(8)
         body.addWidget(self.status)
         body.addWidget(self.transcript, 1)
         body.addLayout(btn_row)
-        body_widget = QWidget()
-        body_widget.setLayout(body)
-        root.addWidget(body_widget, 1)
+        self.body_widget = QWidget()
+        self.body_widget.setLayout(body)
+        root.addWidget(self.body_widget, 1)
+
+        self._collapsed = False
+        self._expanded_size = (460, 320)
 
         self.setStyleSheet(QSS)
 
@@ -564,6 +644,25 @@ class LiteWindow(QWidget):
         # Tracks whether the current recording was started via the global hotkey.
         # Only hotkey-driven sessions auto-paste into the focused window.
         self._session_via_hotkey = False
+
+        # Warm the Whisper model in the background so the first hotkey press
+        # doesn't pay for cold-start (~5-15s on CPU int8 for base.en).
+        self._preload_done.connect(self._on_preload_done)
+        self.status.setText(f"Warming up {self.model_name} model...")
+        threading.Thread(target=self._preload_model, daemon=True).start()
+
+    def _preload_model(self) -> None:
+        try:
+            _get_model(self.model_name, self.device_pref)
+            self._preload_done.emit(True, "")
+        except Exception as e:
+            self._preload_done.emit(False, str(e))
+
+    def _on_preload_done(self, ok: bool, msg: str) -> None:
+        if ok:
+            self.status.setText(self._status_idle())
+        else:
+            self.status.setText(f"Model preload failed: {msg}")
 
     # ---- helpers ----
 
@@ -652,7 +751,13 @@ class LiteWindow(QWidget):
             return
         self.status.setText("Transcribing…")
         paste_after = self.auto_paste and self._session_via_hotkey
-        self.worker = TranscribeWorker(wav, paste_after, self.model_name, self._target_handle)
+        self.worker = TranscribeWorker(
+            wav,
+            paste_after,
+            self.model_name,
+            self.device_pref,
+            self._target_handle,
+        )
         self.worker.finished_text.connect(self._on_transcribed)
         self.worker.failed.connect(self._on_failed)
         self.worker.start()
@@ -677,6 +782,9 @@ class LiteWindow(QWidget):
         QGuiApplication.clipboard().setText(text)
         dev = f"{meta['device']}/{meta['compute']}" if meta.get("device") else "?"
         elapsed = meta["elapsed_ms"]
+        if meta.get("fallback_reason"):
+            self.status.setText(f"CUDA unavailable, used CPU ({elapsed} ms, {dev})")
+            return
         if meta.get("paste_after"):
             _send_paste_async(meta.get("target_handle"))
             self.status.setText(f"Pasted ({elapsed} ms, {dev})")
@@ -701,6 +809,25 @@ class LiteWindow(QWidget):
             f"Auto-paste  {'on' if self.auto_paste else 'off'}"
         )
 
+    def _toggle_collapse(self) -> None:
+        self._collapsed = not self._collapsed
+        if self._collapsed:
+            self._expanded_size = (self.width(), self.height())
+            self.header.setVisible(False)
+            self.transcript.setVisible(False)
+            self.btn_collapse.setText("+")
+            self.btn_collapse.setToolTip("Expand")
+            # Let the layout shrink to status + btn row only.
+            self.setMinimumHeight(0)
+            self.resize(self._expanded_size[0], 1)
+            self.adjustSize()
+        else:
+            self.header.setVisible(True)
+            self.transcript.setVisible(True)
+            self.btn_collapse.setText("–")
+            self.btn_collapse.setToolTip("Collapse to mini bar")
+            self.resize(*self._expanded_size)
+
     def closeEvent(self, event) -> None:  # noqa: N802
         self.hotkey.stop()
         super().closeEvent(event)
@@ -714,7 +841,7 @@ def main() -> int:
     icon_path = _resource_path("assets/icon.ico")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
-    win = LiteWindow(DEFAULT_HOTKEY, DEFAULT_MODEL)
+    win = LiteWindow(DEFAULT_HOTKEY, DEFAULT_MODEL, DEFAULT_DEVICE)
     win.show()
     return app.exec()
 

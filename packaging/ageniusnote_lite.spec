@@ -16,6 +16,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_data_files
+
 block_cipher = None
 
 IS_WIN = sys.platform == "win32"
@@ -25,10 +27,18 @@ here = Path.cwd()
 app_dir = here  # caller should `cd apps/voice-notes-desktop` first
 entry = str(app_dir / "voice_notes_lite.py")
 
+# Single source of truth for the version. Bundle Info.plist reads this.
+try:
+    VERSION = (app_dir / "packaging" / "VERSION").read_text().strip()
+except FileNotFoundError:
+    VERSION = "0.0.0"
+
 icon_path = str(app_dir / "assets" / ("icon.icns" if IS_MAC else "icon.ico"))
 
 datas = [
     (str(app_dir / "assets"), "assets"),
+    # Required by faster-whisper VAD at runtime.
+    *collect_data_files("faster_whisper", includes=["assets/*.onnx"]),
 ]
 
 hiddenimports = []
@@ -83,7 +93,9 @@ a = Analysis(
         "pyarrow",
         "scipy",         # sklearn / openwakeword dep; not used elsewhere
         "websockets",
-        "yaml",
+        # NOTE: do NOT exclude "yaml" — faster-whisper / ctranslate2 import it
+        # at transcription time. Excluding it broke v1.0.0 installer with
+        # "No module named 'yaml'" on first transcription.
         "zstandard",
         "yarl",
         "aiohttp",
@@ -132,8 +144,8 @@ if IS_MAC:
         info_plist={
             "CFBundleName": "AgeniusNote Lite",
             "CFBundleDisplayName": "AgeniusNote Lite",
-            "CFBundleShortVersionString": "1.0.0",
-            "CFBundleVersion": "1.0.0",
+            "CFBundleShortVersionString": VERSION,
+            "CFBundleVersion": VERSION,
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "11.0",
             # Required permission prompts on first run:

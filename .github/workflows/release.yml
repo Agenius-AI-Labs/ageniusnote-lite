@@ -76,7 +76,15 @@ jobs:
           generate_release_notes: true
 
   build-macos:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest      # Apple Silicon (arm64)
+            arch: arm64
+          - runner: macos-13          # Intel (x86_64)
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -112,6 +120,8 @@ jobs:
         run: brew install create-dmg
 
       - name: Build .app + .dmg
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           chmod +x packaging/build.sh
           PYTHON=python ./packaging/build.sh "${{ steps.ver.outputs.version }}"
@@ -126,7 +136,7 @@ jobs:
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AgeniusNoteLite-macOS
+          name: AgeniusNoteLite-macOS-${{ matrix.arch }}
           path: dist-build-mac-*/*.dmg
 
       - name: Attach to release

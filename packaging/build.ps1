@@ -74,6 +74,13 @@ if (-not $SkipBuild) {
     & $Python -m pip install --quiet --upgrade pyinstaller
     & $Python -m PyInstaller "packaging/ageniusnote_lite.spec" --noconfirm --clean --distpath $DistPath --workpath $WorkPath
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE)" }
+
+    # Smoke-check critical runtime asset required by faster-whisper VAD.
+    $VadAsset = Join-Path $AppDir "$DistPath\AgeniusNoteLite\_internal\faster_whisper\assets\silero_vad_v6.onnx"
+    if (-not (Test-Path $VadAsset)) {
+        throw "Build sanity check failed: missing required faster-whisper asset: $VadAsset"
+    }
+    Write-Host ">> Verified faster-whisper VAD asset: $VadAsset" -ForegroundColor Green
 } else {
     Write-Host ">> Skipping PyInstaller (SkipBuild=true)" -ForegroundColor Yellow
 }

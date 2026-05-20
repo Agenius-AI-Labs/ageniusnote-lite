@@ -75,8 +75,18 @@ if [[ ! -d "$APP" ]]; then
 fi
 
 # --- 2. Package .dmg ---
-DMG_OUT="${DIST}/AgeniusNoteLite-Setup-${VERSION}.dmg"
-echo ">> Packaging $DMG_OUT"
+# ARCH suffix lets us ship separate Apple Silicon and Intel DMGs to the same release.
+# Set ARCH=arm64 or ARCH=x86_64 via env; defaults to the host arch.
+ARCH="${ARCH:-$(uname -m)}"
+if [[ "$ARCH" == "arm64" || "$ARCH" == "aarch64" ]]; then
+    ARCH_LABEL="arm64"
+elif [[ "$ARCH" == "x86_64" || "$ARCH" == "amd64" ]]; then
+    ARCH_LABEL="x86_64"
+else
+    ARCH_LABEL="$ARCH"
+fi
+DMG_OUT="${DIST}/AgeniusNoteLite-Setup-${VERSION}-${ARCH_LABEL}.dmg"
+echo ">> Packaging $DMG_OUT (arch=${ARCH_LABEL})"
 
 if command -v create-dmg > /dev/null 2>&1; then
     create-dmg \
