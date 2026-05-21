@@ -50,6 +50,12 @@ Both knobs are environment variables, read at launch.
 
 Set them via the Windows env-var dialog or in a wrapper `.cmd` file.
 
+## If the hotkey doesn't fire
+
+Far and away the most common issue. Symptom: you press the hotkey and the Lite window doesn't pulse, nothing happens. The cause is almost always **hotkey collision**, another app installed a global binding on the same chord first and is consuming the keystroke before Lite's listener sees it. Common culprits on Windows include VS Code (and its AI-chat extensions like Codex, Copilot, Cursor), Discord push-to-talk, Steam overlay, OBS, and various productivity launchers. On macOS, Spotlight, Raycast, Alfred, and built-in accessibility shortcuts will all happily eat a chord.
+
+Quick fix: change `VN_LITE_HOTKEY` to something less contested. `<f9>` is almost always safe, as are `<ctrl>+<shift>+;` and `<alt_r>+v`. Set it as a user env var and relaunch Lite, no rebuild needed. If you want to keep `Ctrl+Alt+M`, open the offending app's keybindings UI and unbind it there instead, the change to whichever app you go through propagates immediately. macOS users: if the hotkey still doesn't fire after changing it, double-check that AgeniusNote Lite is granted both **Accessibility** and **Input Monitoring** under System Settings → Privacy & Security. Missing either permission produces the same silent-failure symptom as a collision.
+
 ## How it works
 
 - Audio capture: `sounddevice` (PortAudio) records 16 kHz mono in a background thread.
