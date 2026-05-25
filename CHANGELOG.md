@@ -4,6 +4,19 @@ All notable changes to AgeniusNote Lite are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **In-app Settings dialog.** A new Settings button next to Auto-paste opens a modal for changing the global hotkey, Whisper model, device (CPU / CUDA / auto), and default auto-paste state. The hotkey field captures the next chord you press, so picking a non-colliding shortcut no longer requires editing env vars or knowing the pynput string format.
+- **Persisted user config.** Settings save to `%APPDATA%\AgeniusNote Lite\config.json` (Windows), `~/Library/Application Support/AgeniusNote Lite/` (macOS), or `~/.config/ageniusnote-lite/` (Linux). Resolution priority is `config.json` > `VN_LITE_*` env vars > hardcoded defaults, so existing setups keep working unchanged.
+- **Live apply on save.** Saving Settings rebinds the global hotkey, swaps the model/device, and re-runs warmup in the background — no restart needed.
+- **CUDA wheel auto-discovery.** If the pip wheels `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` / `nvidia-cuda-nvrtc-cu12` are installed in the same environment as Lite, their DLL directories are registered at import time (both `os.add_dll_directory` and `PATH`), so `device=cuda` works without a system CUDA Toolkit install. No-op when the wheels aren't present, so CPU-only setups are unaffected.
+- **Real inference warmup.** Preload now runs a one-second dummy transcribe in the background after loading the model, so the first real hotkey press doesn't pay the per-process cold-start cost (CUDA kernel JIT/selection, Silero VAD model load, decoder graph init). Re-fires automatically when the model or device is changed via Settings.
+
+### Fixed
+- **Hotkey transcripts dropped on CUDA fallback.** When `device=cuda` failed at transcribe time and the CPU fallback succeeded, the resulting text was being skipped by an early `return` in the result handler — the transcript was on the clipboard but never pasted, and the user saw "CUDA unavailable" with no apparent output. The fallback path now pastes/copies the result normally and the fallback note is appended to the status line.
+- **Hidden CUDA errors.** The status bar previously showed a generic "CUDA unavailable, used CPU" with no detail. It now includes the underlying error message (e.g. "library cublas64_12.dll is not found"), truncated to 90 chars, so DLL/driver issues are diagnosable instead of opaque.
+
 ## [1.0.3] - 2026-05-25
 
 ### Fixed
@@ -55,6 +68,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 - macOS DMG with Gatekeeper-friendly first-launch instructions.
 - Cyberpunk theme.
 
+[1.0.3]: https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.3
 [1.0.2]: https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.2
 [1.0.1]: https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.1
 [1.0.0]: https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.0

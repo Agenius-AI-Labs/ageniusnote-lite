@@ -40,7 +40,17 @@ First-run note: faster-whisper downloads the `base.en` model (~150 MB) on the fi
 
 ## Configure
 
-Both knobs are environment variables, read at launch.
+Click the **Settings** button in the Lite window. The dialog lets you change the global hotkey, Whisper model, device (CPU / CUDA / auto), and the default auto-paste state. Changes apply immediately — no restart, no rebuild. The hotkey field is a capture widget: click it, press the chord you want, and the new binding takes effect when you click OK. If you swap the model or device, the new one is warmed up in the background so your first recording afterwards is still snappy.
+
+Settings persist to a JSON file alongside the OS's standard per-user config location:
+
+| Platform | Path |
+|---|---|
+| Windows | `%APPDATA%\AgeniusNote Lite\config.json` |
+| macOS | `~/Library/Application Support/AgeniusNote Lite/config.json` |
+| Linux | `~/.config/ageniusnote-lite/config.json` |
+
+Environment variables are still honored as a fallback (config.json wins if both are set), which makes it easy to manage installs centrally if you want to:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -48,13 +58,21 @@ Both knobs are environment variables, read at launch.
 | `VN_LITE_HOTKEY` | `<ctrl>+<alt>+m` | pynput hotkey string. Examples: `<f9>`, `<alt_r>+v`, `<ctrl>+<shift>+;`. |
 | `VN_LITE_DEVICE` | `cpu` | Device strategy: `cpu` (small installer, default), `cuda` (NVIDIA GPU if CUDA libs exist), or `auto` (try CUDA then CPU). |
 
-Set them via the Windows env-var dialog or in a wrapper `.cmd` file.
+## GPU acceleration (optional)
+
+CPU is the default — it's reliable, fast enough for `base.en` and `small.en`, and doesn't require a multi-gigabyte download. If you have an NVIDIA GPU and want to use `medium.en` or `large-v3` at real-time speeds, you'll need CUDA's cuBLAS + cuDNN runtime libraries. The easiest way is to install them as pip wheels into the same Python environment where Lite runs:
+
+```powershell
+pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+```
+
+Lite auto-discovers the wheel DLLs at startup (no PATH edit, no system CUDA Toolkit install needed) and falls back to CPU transparently if anything goes wrong. After installing, open Settings and switch **Device** to `cuda`. The status bar will read `… cuda/float16` on a successful transcription; if CUDA fails at runtime, the message includes the underlying error so you can act on it.
 
 ## If the hotkey doesn't fire
 
 Far and away the most common issue. Symptom: you press the hotkey and the Lite window doesn't pulse, nothing happens. The cause is almost always **hotkey collision**, another app installed a global binding on the same chord first and is consuming the keystroke before Lite's listener sees it. Common culprits on Windows include VS Code (and its AI-chat extensions like Codex, Copilot, Cursor), Discord push-to-talk, Steam overlay, OBS, and various productivity launchers. On macOS, Spotlight, Raycast, Alfred, and built-in accessibility shortcuts will all happily eat a chord.
 
-Quick fix: change `VN_LITE_HOTKEY` to something less contested. `<f9>` is almost always safe, as are `<ctrl>+<shift>+;` and `<alt_r>+v`. Set it as a user env var and relaunch Lite, no rebuild needed. If you want to keep `Ctrl+Alt+M`, open the offending app's keybindings UI and unbind it there instead, the change to whichever app you go through propagates immediately. macOS users: if the hotkey still doesn't fire after changing it, double-check that AgeniusNote Lite is granted both **Accessibility** and **Input Monitoring** under System Settings → Privacy & Security. Missing either permission produces the same silent-failure symptom as a collision.
+Quick fix: open Settings, click the hotkey field, and press something less contested. **F9** is almost always safe, as are **Ctrl+Shift+;** and **Alt+V**. The new binding takes effect as soon as you click OK — no relaunch needed. If you want to keep `Ctrl+Alt+M`, open the offending app's keybindings UI and unbind it there instead; the change to whichever app you go through propagates immediately. macOS users: if the hotkey still doesn't fire after changing it, double-check that AgeniusNote Lite is granted both **Accessibility** and **Input Monitoring** under System Settings → Privacy & Security. Missing either permission produces the same silent-failure symptom as a collision.
 
 ## How it works
 

@@ -16,6 +16,7 @@ copies, and leaves you to paste yourself.
 from __future__ import annotations
 
 import io
+import json
 import multiprocessing
 import os
 import sys
@@ -41,6 +42,58 @@ def _user_models_dir() -> Path:
         base = Path.home() / ".local" / "share" / "agenius-note-lite"
     return base / "models"
 
+
+def _register_cuda_dll_dirs() -> None:
+    """Make pip-installed nvidia-*-cu12 wheel DLLs findable on Windows.
+
+    ctranslate2 (the engine faster-whisper uses) loads cuBLAS + cuDNN at
+    runtime. The Windows wheels for `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`
+    drop their DLLs under `nvidia/<pkg>/bin/` inside site-packages — that
+    directory is NOT on Windows' DLL search path by default, so without this
+    hook ctranslate2 fails with "cublas64_12.dll is not found" even when the
+    pip wheels are installed.
+
+    We do two things per bin dir:
+      1. os.add_dll_directory — works for Python extension imports + ctypes.
+      2. Prepend to PATH — ctranslate2's native LoadLibrary call doesn't
+         consistently honor (1) (the headless interpreter sees the DLLs but
+         the PySide6 process doesn't), so PATH is the belt to (1)'s suspenders.
+
+    No-op if not on Windows or the packages aren't installed.
+    """
+    if sys.platform != "win32":
+        return
+    import importlib.util
+    extra_path: list[str] = []
+    for pkg in ("nvidia.cublas", "nvidia.cudnn", "nvidia.cuda_nvrtc"):
+        try:
+            spec = importlib.util.find_spec(pkg)
+        except (ImportError, ValueError):
+            continue
+        if not spec or not spec.submodule_search_locations:
+            continue
+        bin_dir = Path(spec.submodule_search_locations[0]) / "bin"
+        if not bin_dir.is_dir():
+            continue
+        bin_str = str(bin_dir)
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(bin_str)
+            except (FileNotFoundError, OSError):
+                pass
+        extra_path.append(bin_str)
+    if extra_path:
+        current = os.environ.get("PATH", "")
+        # De-dupe to avoid bloating PATH on repeated imports (re-execs in dev).
+        present = set(current.split(os.pathsep))
+        prepend = [p for p in extra_path if p not in present]
+        if prepend:
+            os.environ["PATH"] = os.pathsep.join(prepend) + os.pathsep + current
+
+
+_register_cuda_dll_dirs()
+
+
 import numpy as np  # noqa: E402
 import sounddevice as sd  # noqa: E402
 import soundfile as sf  # noqa: E402
@@ -49,8 +102,14 @@ from PySide6.QtCore import Qt, QObject, QThread, Signal  # noqa: E402
 from PySide6.QtGui import QGuiApplication, QIcon, QKeySequence, QShortcut  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QTextEdit,
@@ -99,11 +158,64 @@ class Recorder:
         sf.write(buf, audio, self.sample_rate, format="WAV", subtype="PCM_16")
         return buf.getvalue()
 
-DEFAULT_MODEL = os.environ.get("VN_LITE_MODEL", "base.en")
-DEFAULT_HOTKEY = os.environ.get("VN_LITE_HOTKEY", "<ctrl>+<alt>+m")
-DEFAULT_DEVICE = (os.environ.get("VN_LITE_DEVICE", "cpu") or "cpu").strip().lower()
-if DEFAULT_DEVICE not in {"cpu", "cuda", "auto"}:
-    DEFAULT_DEVICE = "cpu"
+# ---------- User config (persisted) ----------
+#
+# Resolution priority for each setting: config.json > env var > hardcoded default.
+# Env vars stay supported so existing user setups keep working; the in-app
+# Settings dialog writes config.json which then takes precedence.
+
+VALID_DEVICES = ("cpu", "cuda", "auto")
+KNOWN_MODELS = ("tiny.en", "base.en", "small.en", "medium.en", "large-v3")
+FALLBACK_MODEL = "base.en"
+FALLBACK_HOTKEY = "<ctrl>+<alt>+m"
+FALLBACK_DEVICE = "cpu"
+
+
+def _config_dir() -> Path:
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return Path(base) / "AgeniusNote Lite"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "AgeniusNote Lite"
+    return Path.home() / ".config" / "ageniusnote-lite"
+
+
+def _config_path() -> Path:
+    return _config_dir() / "config.json"
+
+
+def load_config() -> dict:
+    path = _config_path()
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_config(cfg: dict) -> None:
+    d = _config_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    _config_path().write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+def _resolve(cfg: dict, key: str, env_var: str, fallback: str) -> str:
+    val = cfg.get(key)
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    return os.environ.get(env_var, fallback)
+
+
+_CONFIG = load_config()
+
+DEFAULT_MODEL = _resolve(_CONFIG, "model", "VN_LITE_MODEL", FALLBACK_MODEL)
+DEFAULT_HOTKEY = _resolve(_CONFIG, "hotkey", "VN_LITE_HOTKEY", FALLBACK_HOTKEY)
+DEFAULT_DEVICE = _resolve(_CONFIG, "device", "VN_LITE_DEVICE", FALLBACK_DEVICE).lower()
+if DEFAULT_DEVICE not in VALID_DEVICES:
+    DEFAULT_DEVICE = FALLBACK_DEVICE
+DEFAULT_AUTO_PASTE = bool(_CONFIG.get("auto_paste", True))
 
 
 def _read_app_version() -> str:
@@ -241,6 +353,42 @@ def _get_model(model_name: str, device_pref: str):
             compute=compute,
         )
     return _WHISPER_CACHE["model"]
+
+
+def _warmup_inference(model) -> None:
+    """Run a throwaway transcribe so the first real call doesn't pay the
+    one-time cold-start costs: CUDA kernel JIT/selection, Silero VAD model
+    load, decoder graph init, GPU memory pool sizing. On CUDA this saves
+    ~5 seconds on the first hotkey press; on CPU it's smaller but still
+    noticeable. Best-effort — any failure here just means first real
+    transcribe is slow, not broken."""
+    import tempfile
+    try:
+        sr = SAMPLE_RATE
+        # 1s @ 440Hz sine, low amplitude. Non-silent so VAD doesn't gate the
+        # decoder out; quiet enough that nothing hallucinates words.
+        t = np.linspace(0.0, 1.0, sr, endpoint=False, dtype=np.float32)
+        audio = (0.05 * np.sin(2.0 * np.pi * 440.0 * t)).astype(np.float32)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            sf.write(tmp, audio, sr, format="WAV", subtype="PCM_16")
+            path = tmp.name
+        try:
+            # Exhaust the segment generator — that's what triggers the real
+            # work in faster-whisper (transcribe() returns a lazy generator).
+            segs, _ = model.transcribe(
+                path,
+                vad_filter=True,
+                vad_parameters={"min_silence_duration_ms": 500},
+            )
+            for _ in segs:
+                pass
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    except Exception:
+        pass
 
 
 def _run_transcribe(model, wav_path: str) -> str:
@@ -625,6 +773,210 @@ QPushButton#collapse:hover {
 """
 
 
+# ---------- Settings dialog ----------
+
+_PYNPUT_NAME_DISPLAY = {
+    "<ctrl>": "Ctrl", "<alt>": "Alt", "<shift>": "Shift", "<cmd>": "Cmd",
+    "<space>": "Space", "<tab>": "Tab", "<esc>": "Esc", "<enter>": "Enter",
+    "<backspace>": "Backspace", "<delete>": "Delete", "<insert>": "Insert",
+    "<home>": "Home", "<end>": "End", "<page_up>": "PgUp", "<page_down>": "PgDown",
+    "<up>": "Up", "<down>": "Down", "<left>": "Left", "<right>": "Right",
+}
+
+
+def _human_combo(pynput_combo: str) -> str:
+    if not pynput_combo:
+        return ""
+    out: list[str] = []
+    for p in pynput_combo.split("+"):
+        lp = p.lower()
+        if lp in _PYNPUT_NAME_DISPLAY:
+            out.append(_PYNPUT_NAME_DISPLAY[lp])
+        elif lp.startswith("<f") and lp.endswith(">") and lp[2:-1].isdigit():
+            out.append(f"F{lp[2:-1]}")
+        elif len(p) == 1 and p.isalpha():
+            out.append(p.upper())
+        else:
+            out.append(p)
+    return "+".join(out)
+
+
+# Qt -> pynput modifier maps. Qt normalizes Ctrl<->Cmd on macOS at the
+# QKeySequence level, so we mirror that when emitting pynput strings.
+if sys.platform == "darwin":
+    _QT_MOD_TO_PYNPUT = {
+        Qt.ControlModifier: "<cmd>",
+        Qt.MetaModifier: "<ctrl>",
+        Qt.AltModifier: "<alt>",
+        Qt.ShiftModifier: "<shift>",
+    }
+else:
+    _QT_MOD_TO_PYNPUT = {
+        Qt.ControlModifier: "<ctrl>",
+        Qt.MetaModifier: "<cmd>",
+        Qt.AltModifier: "<alt>",
+        Qt.ShiftModifier: "<shift>",
+    }
+
+
+class HotkeyCaptureEdit(QLineEdit):
+    """Read-only line edit that captures the next key chord pressed in it.
+
+    Stores the chord internally in pynput's GlobalHotKeys format
+    (e.g. "<ctrl>+<alt>+m"), displays a human-readable version.
+    """
+
+    def __init__(self, initial_pynput: str, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setPlaceholderText("Click here, then press a key combination")
+        self._pynput_value = initial_pynput
+        self.setText(_human_combo(initial_pynput))
+
+    def pynput_value(self) -> str:
+        return self._pynput_value
+
+    def set_pynput_value(self, combo: str) -> None:
+        self._pynput_value = combo
+        self.setText(_human_combo(combo))
+
+    def keyPressEvent(self, event):  # noqa: N802 (Qt API)
+        key = event.key()
+        # Ignore bare modifier presses — wait for a non-modifier finishing key.
+        if key in (
+            Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta,
+            Qt.Key_AltGr, Qt.Key_CapsLock, Qt.Key_NumLock, Qt.Key_ScrollLock,
+            0,
+        ):
+            return
+        mods = event.modifiers()
+        parts: list[str] = []
+        # Emit modifiers in a stable order.
+        for qt_mod in (Qt.ControlModifier, Qt.AltModifier, Qt.ShiftModifier, Qt.MetaModifier):
+            if mods & qt_mod:
+                parts.append(_QT_MOD_TO_PYNPUT[qt_mod])
+        suffix = self._key_to_pynput(key, event.text())
+        if not suffix:
+            return
+        parts.append(suffix)
+        self._pynput_value = "+".join(parts)
+        self.setText(_human_combo(self._pynput_value))
+
+    @staticmethod
+    def _key_to_pynput(qt_key: int, text: str) -> str:
+        # Function keys F1..F35
+        if Qt.Key_F1 <= qt_key <= Qt.Key_F35:
+            return f"<f{qt_key - Qt.Key_F1 + 1}>"
+        named = {
+            Qt.Key_Space: "<space>",
+            Qt.Key_Tab: "<tab>",
+            Qt.Key_Escape: "<esc>",
+            Qt.Key_Return: "<enter>",
+            Qt.Key_Enter: "<enter>",
+            Qt.Key_Backspace: "<backspace>",
+            Qt.Key_Delete: "<delete>",
+            Qt.Key_Insert: "<insert>",
+            Qt.Key_Home: "<home>",
+            Qt.Key_End: "<end>",
+            Qt.Key_PageUp: "<page_up>",
+            Qt.Key_PageDown: "<page_down>",
+            Qt.Key_Up: "<up>",
+            Qt.Key_Down: "<down>",
+            Qt.Key_Left: "<left>",
+            Qt.Key_Right: "<right>",
+        }
+        if qt_key in named:
+            return named[qt_key]
+        # Letter / digit / punctuation. event.text() gives the produced
+        # character (respecting Shift). pynput wants the lowercase letter for
+        # alpha chords; for punctuation, the printed glyph is fine.
+        if text and text.isprintable() and len(text) >= 1:
+            ch = text[0]
+            return ch.lower() if ch.isalpha() else ch
+        return ""
+
+
+class SettingsDialog(QDialog):
+    def __init__(
+        self,
+        parent: QWidget,
+        hotkey: str,
+        model: str,
+        device: str,
+        auto_paste: bool,
+    ):
+        super().__init__(parent)
+        # objectName="root" makes the parent's QSS dark-background rule apply
+        # to this dialog too, so the inherited button colors aren't washed out
+        # against the default OS-gray background.
+        self.setObjectName("root")
+        self.setWindowTitle("AgeniusNote Lite — Settings")
+        self.setModal(True)
+        self.resize(380, 220)
+
+        self.hotkey_edit = HotkeyCaptureEdit(hotkey)
+
+        self.model_combo = QComboBox()
+        for m in KNOWN_MODELS:
+            self.model_combo.addItem(m)
+        # Preserve any custom model already in config (e.g. set via env var or
+        # hand-edited config.json) so opening Settings doesn't silently change it.
+        if model not in KNOWN_MODELS:
+            self.model_combo.addItem(model)
+        self.model_combo.setCurrentText(model)
+
+        self.device_combo = QComboBox()
+        for d in VALID_DEVICES:
+            self.device_combo.addItem(d)
+        self.device_combo.setCurrentText(device if device in VALID_DEVICES else FALLBACK_DEVICE)
+
+        self.auto_paste_check = QCheckBox("Auto-paste into focused window after hotkey")
+        self.auto_paste_check.setChecked(bool(auto_paste))
+        # Inherited QSS only styles named labels / buttons; default Qt color
+        # on the dark dialog background is near-invisible. Match the hint
+        # label's secondary-blue tone.
+        self.auto_paste_check.setStyleSheet("QCheckBox { color: #7ea8cc; }")
+
+        def _form_label(text: str) -> QLabel:
+            lbl = QLabel(text)
+            lbl.setStyleSheet("color: #7ea8cc;")
+            return lbl
+
+        form = QFormLayout()
+        form.addRow(_form_label("Global hotkey:"), self.hotkey_edit)
+        form.addRow(_form_label("Whisper model:"), self.model_combo)
+        form.addRow(_form_label("Device:"), self.device_combo)
+        form.addRow(_form_label(""), self.auto_paste_check)
+
+        hint = QLabel(
+            "Hotkey: click the field and press the combination you want.\n"
+            "Settings save to config.json; environment variables remain a fallback."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #7ea8cc; font-size: 11px;")
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
+            parent=self,
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        layout.addWidget(buttons)
+
+    def values(self) -> dict:
+        return {
+            "hotkey": self.hotkey_edit.pynput_value() or FALLBACK_HOTKEY,
+            "model": self.model_combo.currentText().strip() or FALLBACK_MODEL,
+            "device": self.device_combo.currentText().strip().lower() or FALLBACK_DEVICE,
+            "auto_paste": self.auto_paste_check.isChecked(),
+        }
+
+
 class LiteWindow(QWidget):
     _preload_done = Signal(bool, str)  # (ok, message)
 
@@ -645,7 +997,7 @@ class LiteWindow(QWidget):
         self.recorder: Recorder | None = None
         self.recording = False
         self.worker: TranscribeWorker | None = None
-        self.auto_paste = True  # auto-paste only happens on hotkey triggers
+        self.auto_paste = DEFAULT_AUTO_PASTE  # auto-paste only happens on hotkey triggers
         self._target_handle: object | None = None  # captured at recording start (HWND on Windows, bundle id on macOS)
 
         # Don't auto-activate when the window is shown / restacked. The flag
@@ -693,11 +1045,18 @@ class LiteWindow(QWidget):
         self.btn_clear = QPushButton("Clear")
         self.btn_clear.clicked.connect(lambda: self.transcript.clear())
 
-        self.btn_paste_toggle = QPushButton("Auto-paste  on")
+        self.btn_paste_toggle = QPushButton(
+            f"Auto-paste  {'on' if self.auto_paste else 'off'}"
+        )
         self.btn_paste_toggle.setObjectName("pasteToggle")
         self.btn_paste_toggle.setCheckable(True)
-        self.btn_paste_toggle.setChecked(True)
+        self.btn_paste_toggle.setChecked(self.auto_paste)
         self.btn_paste_toggle.clicked.connect(self._toggle_paste)
+
+        self.btn_settings = QPushButton("Settings")
+        self.btn_settings.setObjectName("settings")
+        self.btn_settings.setToolTip("Change hotkey, model, device")
+        self.btn_settings.clicked.connect(self._open_settings)
 
         # Collapse / expand toggle. Collapsed shows just the status line + this
         # button row, so the always-on-top window is minimally invasive.
@@ -713,6 +1072,7 @@ class LiteWindow(QWidget):
         btn_row.addWidget(self.btn_clear)
         btn_row.addStretch(1)
         btn_row.addWidget(self.btn_paste_toggle)
+        btn_row.addWidget(self.btn_settings)
         btn_row.addWidget(self.btn_collapse)
 
         # Layout — header strip stretches edge-to-edge, body has padding
@@ -760,7 +1120,8 @@ class LiteWindow(QWidget):
 
     def _preload_model(self) -> None:
         try:
-            _get_model(self.model_name, self.device_pref)
+            model = _get_model(self.model_name, self.device_pref)
+            _warmup_inference(model)
             self._preload_done.emit(True, "")
         except Exception as e:
             self._preload_done.emit(False, str(e))
@@ -788,14 +1149,7 @@ class LiteWindow(QWidget):
     # ---- helpers ----
 
     def _human_combo(self) -> str:
-        return (
-            self.hotkey_combo
-            .replace("<ctrl>", "Ctrl")
-            .replace("<alt>", "Alt")
-            .replace("<shift>", "Shift")
-            .replace("<cmd>", "Cmd")
-            .replace("<space>", "Space")
-        )
+        return _human_combo(self.hotkey_combo)
 
     def _status_idle(self) -> str:
         dev = ""
@@ -903,14 +1257,21 @@ class LiteWindow(QWidget):
         QGuiApplication.clipboard().setText(text)
         dev = f"{meta['device']}/{meta['compute']}" if meta.get("device") else "?"
         elapsed = meta["elapsed_ms"]
-        if meta.get("fallback_reason"):
-            self.status.setText(f"CUDA unavailable, used CPU ({elapsed} ms, {dev})")
-            return
         if meta.get("paste_after"):
             _send_paste_async(meta.get("target_handle"))
-            self.status.setText(f"Pasted ({elapsed} ms, {dev})")
+            action = "Pasted"
         else:
-            self.status.setText(f"Copied ({elapsed} ms, {dev})")
+            action = "Copied"
+        if meta.get("fallback_reason"):
+            # Surface the underlying CUDA error so the user can act on it
+            # (missing cuBLAS/cuDNN DLL, unsupported GPU, etc.).
+            reason = str(meta["fallback_reason"])
+            short = reason if len(reason) <= 90 else reason[:87] + "..."
+            self.status.setText(
+                f"{action} ({elapsed} ms, CPU fallback) — CUDA: {short}"
+            )
+        else:
+            self.status.setText(f"{action} ({elapsed} ms, {dev})")
 
     def _on_failed(self, err: str) -> None:
         self.status.setText(f"Transcribe failed: {err}")
@@ -929,6 +1290,83 @@ class LiteWindow(QWidget):
         self.btn_paste_toggle.setText(
             f"Auto-paste  {'on' if self.auto_paste else 'off'}"
         )
+        self._persist({"auto_paste": self.auto_paste})
+
+    # ---- settings ----
+
+    def _persist(self, updates: dict) -> None:
+        """Merge updates into the on-disk config. Failures are non-fatal."""
+        try:
+            cfg = load_config()
+            cfg.update(updates)
+            save_config(cfg)
+        except OSError as exc:
+            self.status.setText(f"Couldn't save settings: {exc}")
+
+    def _open_settings(self) -> None:
+        dlg = SettingsDialog(
+            self,
+            hotkey=self.hotkey_combo,
+            model=self.model_name,
+            device=self.device_pref,
+            auto_paste=self.auto_paste,
+        )
+        if dlg.exec() != QDialog.Accepted:
+            return
+        new = dlg.values()
+        self._apply_settings(
+            hotkey=new["hotkey"],
+            model=new["model"],
+            device=new["device"],
+            auto_paste=bool(new["auto_paste"]),
+        )
+
+    def _apply_settings(
+        self,
+        hotkey: str,
+        model: str,
+        device: str,
+        auto_paste: bool,
+    ) -> None:
+        # Persist first so a crash mid-apply still leaves the file consistent.
+        self._persist({
+            "hotkey": hotkey,
+            "model": model,
+            "device": device,
+            "auto_paste": auto_paste,
+        })
+
+        # Auto-paste toggle button + flag.
+        self.auto_paste = auto_paste
+        self.btn_paste_toggle.setChecked(auto_paste)
+        self.btn_paste_toggle.setText(
+            f"Auto-paste  {'on' if auto_paste else 'off'}"
+        )
+
+        # Hotkey: rebind only if it actually changed (avoids briefly leaving
+        # the user with no global hotkey for an identical save).
+        if hotkey != self.hotkey_combo:
+            self.hotkey.stop()
+            self.hotkey_combo = hotkey
+            self.hotkey = HotkeyBridge(hotkey)
+            self.hotkey.triggered.connect(self._toggle_hotkey)
+            self._hotkey_ok = self.hotkey.start()
+            self.transcript.setPlaceholderText(
+                f"Press {self._human_combo()} anywhere to dictate into the focused window.\n"
+                "Or click Record to dictate into this box."
+            )
+
+        # Model / device: if either changed, swap and re-warm in the background
+        # so the next hotkey press doesn't pay cold-start.
+        device = device if device in VALID_DEVICES else FALLBACK_DEVICE
+        rewarm = (model != self.model_name) or (device != self.device_pref)
+        self.model_name = model
+        self.device_pref = device
+        if rewarm:
+            self.status.setText(f"Warming up {self.model_name} model...")
+            threading.Thread(target=self._preload_model, daemon=True).start()
+        else:
+            self.status.setText(self._status_idle())
 
     def _toggle_collapse(self) -> None:
         self._collapsed = not self._collapsed

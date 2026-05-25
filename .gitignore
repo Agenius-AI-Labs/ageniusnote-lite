@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
+# Virtualenvs
+.venv/
+venv/
+
 # SQLite working files (per-user state, regenerated on first run)
 voice_notes.db
 voice_notes.db-shm
