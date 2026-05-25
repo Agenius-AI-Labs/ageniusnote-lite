@@ -60,13 +60,26 @@ Environment variables are still honored as a fallback (config.json wins if both 
 
 ## GPU acceleration (optional)
 
-CPU is the default — it's reliable, fast enough for `base.en` and `small.en`, and doesn't require a multi-gigabyte download. If you have an NVIDIA GPU and want to use `medium.en` or `large-v3` at real-time speeds, you'll need CUDA's cuBLAS + cuDNN runtime libraries. The easiest way is to install them as pip wheels into the same Python environment where Lite runs:
+CPU is the default — reliable, fast enough for `base.en` and `small.en`, and the installer doesn't ship NVIDIA libraries (keeps it small). If you have an NVIDIA GPU and want `medium.en` or `large-v3` at real-time speeds, you'll need CUDA's cuBLAS + cuDNN runtime libraries findable on your system. Setup differs depending on how you run Lite:
+
+### Running from source (dev mode)
+
+Install the libraries as pip wheels into the same Python environment where Lite runs:
 
 ```powershell
 pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 ```
 
-Lite auto-discovers the wheel DLLs at startup (no PATH edit, no system CUDA Toolkit install needed) and falls back to CPU transparently if anything goes wrong. After installing, open Settings and switch **Device** to `cuda`. The status bar will read `… cuda/float16` on a successful transcription; if CUDA fails at runtime, the message includes the underlying error so you can act on it.
+Lite auto-discovers the wheel DLLs at startup — no PATH edit, no system CUDA Toolkit install needed. The discovery is a no-op when the wheels aren't installed.
+
+### Running the installed app (frozen / installer build)
+
+The installer doesn't bundle the CUDA libraries (a full bundle would add ~2.5 GB). Pick one of:
+
+1. **Install NVIDIA CUDA Toolkit 12.x + cuDNN 9** system-wide from <https://developer.nvidia.com/cuda-downloads> and <https://developer.nvidia.com/cudnn-downloads>. The toolkit installer adds its `bin/` directory to your system `PATH`, and the installed AgeniusNote Lite picks the DLLs up from there automatically. This is the recommended path.
+2. **Drop the DLLs into the install folder** — copy `cublas64_12.dll`, `cublasLt64_12.dll`, `cudnn64_9.dll` (and the rest of cuDNN's `cudnn_*.dll`), and `nvrtc64_120_0.dll` into `%LocalAppData%\Programs\AgeniusNote Lite\` next to `AgeniusNoteLite.exe`. Windows always searches the application directory first, so these are found before any PATH lookup. Useful if you don't want to install the toolkit system-wide.
+
+After either step, open Settings and switch **Device** to `cuda`. The status bar reads `… cuda/float16` on a successful transcription; if CUDA fails at runtime, the message includes the underlying error so you can act on it.
 
 ## If the hotkey doesn't fire
 
