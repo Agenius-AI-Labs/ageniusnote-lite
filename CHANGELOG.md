@@ -4,6 +4,18 @@ All notable changes to AgeniusNote Lite are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-05-25
+
+### Fixed
+- **macOS launch loop / runaway window spawning on first run.** The frozen `.app` was missing `multiprocessing.freeze_support()`, so any multiprocessing child (sounddevice / ctranslate2 thread helpers) re-execed the entire bundle and spawned a fresh Qt window. Each child then hit bug #2 below, crashed, and macOS LaunchServices re-ran the bundle, producing what looked like a Dock-icon-bouncing loop with dozens of windows. Calling `freeze_support()` + `set_start_method("spawn", force=True)` at the top of `main()` kills the loop.
+- **Whisper model download segfault on first run.** Passing a HF Hub model id directly to `WhisperModel(...)` makes libctranslate2 download from inside native code, and any failure (no internet, partial cache, sandbox permission) crashes inside spdlog's error path with `EXC_BAD_ACCESS` instead of raising a clean Python exception. Now we pre-download with `huggingface_hub.snapshot_download` to `~/Library/Application Support/AgeniusNote Lite/models/` (mac) or `%LOCALAPPDATA%\AgeniusNote Lite\models\` (win), validate `model.bin` exists and is non-trivial, then pass the local path to `WhisperModel`. Failures now surface as a clear Qt error dialog.
+
+### Added
+- Explicit `huggingface_hub` dependency in `requirements.txt` (was already a transitive dep of faster-whisper; pinning it removes the implicit chain).
+
+### Known limitations
+- The `.app` is still ad-hoc signed, not Apple-notarized. Users downloading via Chrome will see the quarantine flag; until notarization lands, the workaround is `xattr -dr com.apple.quarantine "/Applications/AgeniusNote Lite.app"` after install.
+
 ## [1.0.2] - 2026-05-20
 
 ### Fixed

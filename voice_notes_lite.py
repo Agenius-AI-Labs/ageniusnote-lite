@@ -16,6 +16,7 @@ copies, and leaves you to paste yourself.
 from __future__ import annotations
 
 import io
+import multiprocessing
 import os
 import sys
 import threading
@@ -23,6 +24,22 @@ import time
 from pathlib import Path
 
 _APP_DIR = Path(__file__).resolve().parent
+
+
+def _user_models_dir() -> Path:
+    """Per-user, writable directory for cached Whisper model weights.
+
+    Kept outside the .app bundle so signed/notarized installs don't need
+    write access to /Applications and re-runs survive app updates.
+    """
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "AgeniusNote Lite"
+    elif sys.platform == "win32":
+        root = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        base = Path(root) / "AgeniusNote Lite"
+    else:
+        base = Path.home() / ".local" / "share" / "agenius-note-lite"
+    return base / "models"
 
 import numpy as np  # noqa: E402
 import sounddevice as sd  # noqa: E402
@@ -34,6 +51,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -127,20 +145,82 @@ def _resource_path(relative: str) -> Path:
 _WHISPER_CACHE: dict = {"model": None, "name": "", "pref": "", "device": "", "compute": ""}
 
 
+_HF_REPO_FOR_SIZE = {
+    # faster-whisper ships pre-converted CT2 weights under Systran/* on HF Hub.
+    "tiny":     "Systran/faster-whisper-tiny",
+    "tiny.en":  "Systran/faster-whisper-tiny.en",
+    "base":     "Systran/faster-whisper-base",
+    "base.en":  "Systran/faster-whisper-base.en",
+    "small":    "Systran/faster-whisper-small",
+    "small.en": "Systran/faster-whisper-small.en",
+    "medium":   "Systran/faster-whisper-medium",
+    "medium.en":"Systran/faster-whisper-medium.en",
+    "large-v1": "Systran/faster-whisper-large-v1",
+    "large-v2": "Systran/faster-whisper-large-v2",
+    "large-v3": "Systran/faster-whisper-large-v3",
+}
+
+
+def _resolve_model_path(model_name: str) -> str:
+    """Download (if needed) and return an absolute path to a faster-whisper CT2
+    model directory.
+
+    Why this exists: passing a HF repo id directly to WhisperModel triggers
+    download from inside libctranslate2 native code. When that download fails
+    (no internet, partial cache, sandbox permissions), libctranslate2's spdlog
+    error path segfaults instead of raising a clean Python exception. Doing
+    the download here means any failure surfaces as a normal Python error we
+    can show in the UI.
+    """
+    if os.path.isdir(model_name):
+        return model_name
+
+    repo_id = _HF_REPO_FOR_SIZE.get(model_name, model_name)
+    cache_root = _user_models_dir()
+    cache_root.mkdir(parents=True, exist_ok=True)
+
+    from huggingface_hub import snapshot_download
+
+    local_dir = snapshot_download(
+        repo_id=repo_id,
+        cache_dir=str(cache_root),
+        local_files_only=False,
+        # Only what ctranslate2 actually needs for inference.
+        allow_patterns=[
+            "config.json",
+            "model.bin",
+            "tokenizer.json",
+            "vocabulary.txt",
+            "preprocessor_config.json",
+        ],
+    )
+
+    # Sanity check before handing to ctranslate2 — its native loader will
+    # crash inside spdlog if model.bin is missing or zero-length.
+    bin_path = Path(local_dir) / "model.bin"
+    if not bin_path.exists() or bin_path.stat().st_size < 1024:
+        raise RuntimeError(
+            f"Model {model_name} downloaded but model.bin is missing or truncated "
+            f"at {bin_path}. Delete {cache_root} and try again."
+        )
+    return local_dir
+
+
 def _build_model(model_name: str, device_pref: str):
     from faster_whisper import WhisperModel
     pref = (device_pref or "cpu").lower()
+    resolved = _resolve_model_path(model_name)
     if pref == "cuda":
         try:
-            return WhisperModel(model_name, device="cuda", compute_type="float16"), "cuda", "float16"
+            return WhisperModel(resolved, device="cuda", compute_type="float16"), "cuda", "float16"
         except Exception:
-            return WhisperModel(model_name, device="cpu", compute_type="int8"), "cpu", "int8"
+            return WhisperModel(resolved, device="cpu", compute_type="int8"), "cpu", "int8"
     if pref == "auto":
         try:
-            return WhisperModel(model_name, device="cuda", compute_type="float16"), "cuda", "float16"
+            return WhisperModel(resolved, device="cuda", compute_type="float16"), "cuda", "float16"
         except Exception:
-            return WhisperModel(model_name, device="cpu", compute_type="int8"), "cpu", "int8"
-    return WhisperModel(model_name, device="cpu", compute_type="int8"), "cpu", "int8"
+            return WhisperModel(resolved, device="cpu", compute_type="int8"), "cpu", "int8"
+    return WhisperModel(resolved, device="cpu", compute_type="int8"), "cpu", "int8"
 
 
 def _get_model(model_name: str, device_pref: str):
@@ -688,8 +768,22 @@ class LiteWindow(QWidget):
     def _on_preload_done(self, ok: bool, msg: str) -> None:
         if ok:
             self.status.setText(self._status_idle())
-        else:
-            self.status.setText(f"Model preload failed: {msg}")
+            return
+        self.status.setText(f"Model preload failed: {msg}")
+        box = QMessageBox(self)
+        box.setWindowTitle("AgeniusNote Lite — model download failed")
+        box.setIcon(QMessageBox.Critical)
+        box.setText(
+            "AgeniusNote Lite couldn't download the Whisper model on first launch."
+        )
+        box.setInformativeText(
+            f"Model: {self.model_name}\n"
+            f"Cache: {_user_models_dir()}\n\n"
+            "Most common cause is no internet access on first run. The model is "
+            "fetched once from Hugging Face and cached locally; subsequent "
+            "launches work offline.\n\nError:\n" + msg
+        )
+        box.exec()
 
     # ---- helpers ----
 
@@ -861,6 +955,16 @@ class LiteWindow(QWidget):
 
 
 def main() -> int:
+    # CRITICAL for frozen macOS / Windows builds: without this, every
+    # multiprocessing child (sounddevice, ctranslate2 thread helpers, etc.)
+    # re-execs the .app bundle and spawns a fresh Qt window. v1.0.2 shipped
+    # without it and produced a window-spawning loop on first launch.
+    multiprocessing.freeze_support()
+    try:
+        multiprocessing.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
+
     app = QApplication(sys.argv)
     app.setApplicationName("AgeniusNote Lite")
     app.setApplicationVersion(APP_VERSION)
