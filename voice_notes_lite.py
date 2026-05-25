@@ -356,25 +356,35 @@ def _get_model(model_name: str, device_pref: str):
 
 
 def _warmup_inference(model) -> None:
-    """Run a throwaway transcribe so the first real call doesn't pay the
+    """Run throwaway transcribes so the first real call doesn't pay the
     one-time cold-start costs: CUDA kernel JIT/selection, Silero VAD model
-    load, decoder graph init, GPU memory pool sizing. On CUDA this saves
-    ~5 seconds on the first hotkey press; on CPU it's smaller but still
-    noticeable. Best-effort — any failure here just means first real
-    transcribe is slow, not broken."""
+    load, decoder graph init, GPU memory pool sizing.
+
+    Two passes are needed:
+      1. vad_filter=False — forces the decoder to actually run over the
+         audio. Silero VAD treats a pure tone as non-speech and would
+         gate the decoder out, so a single vad_filter=True pass produces
+         zero segments and misses the most expensive cold-start cost
+         (the first real hotkey press then pays multi-second decoder JIT).
+      2. vad_filter=True — loads the Silero VAD model so the first real
+         (VAD-enabled) transcribe doesn't pay that load cost either.
+
+    Best-effort — any failure here just means the first real transcribe
+    is slow, not broken."""
     import tempfile
     try:
         sr = SAMPLE_RATE
-        # 1s @ 440Hz sine, low amplitude. Non-silent so VAD doesn't gate the
-        # decoder out; quiet enough that nothing hallucinates words.
         t = np.linspace(0.0, 1.0, sr, endpoint=False, dtype=np.float32)
         audio = (0.05 * np.sin(2.0 * np.pi * 440.0 * t)).astype(np.float32)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             sf.write(tmp, audio, sr, format="WAV", subtype="PCM_16")
             path = tmp.name
         try:
-            # Exhaust the segment generator — that's what triggers the real
-            # work in faster-whisper (transcribe() returns a lazy generator).
+            # Pass 1: force decoder JIT. Exhaust the lazy generator.
+            segs, _ = model.transcribe(path, vad_filter=False)
+            for _ in segs:
+                pass
+            # Pass 2: load Silero VAD.
             segs, _ = model.transcribe(
                 path,
                 vad_filter=True,
