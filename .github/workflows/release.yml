@@ -76,15 +76,16 @@ jobs:
           generate_release_notes: true
 
   build-macos:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-latest      # Apple Silicon (arm64)
-            arch: arm64
-          - runner: macos-13          # Intel (x86_64)
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-latest
+    env:
+      # All optional. If MACOS_CERT_P12_BASE64 is empty the build runs unsigned
+      # (the pre-notarization behavior) and still ships a DMG.
+      MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+      MACOS_CERT_PWD: ${{ secrets.MACOS_CERT_PWD }}
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      APPLE_NOTARY_ID: ${{ secrets.APPLE_NOTARY_ID }}
+      APPLE_NOTARY_PWD: ${{ secrets.APPLE_NOTARY_PWD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -119,12 +120,34 @@ jobs:
       - name: Install create-dmg
         run: brew install create-dmg
 
-      - name: Build .app + .dmg
-        env:
-          ARCH: ${{ matrix.arch }}
+      - name: Import Developer ID certificate
+        if: env.MACOS_CERT_P12_BASE64 != ''
+        run: |
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PWD="$(openssl rand -base64 24)"
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security import "$CERT_PATH" -P "$MACOS_CERT_PWD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          # Make the imported keychain searchable and allow codesign to use the
+          # key without an interactive prompt.
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PWD" "$KEYCHAIN" > /dev/null
+
+      - name: Build .app + .dmg (sign + notarize when secrets present)
         run: |
           chmod +x packaging/build.sh
           PYTHON=python ./packaging/build.sh "${{ steps.ver.outputs.version }}"
+        env:
+          # build.sh skips signing/notarization when these are empty.
+          VN_SIGN_IDENTITY: ${{ env.MACOS_SIGN_IDENTITY }}
+          VN_NOTARY_APPLE_ID: ${{ env.APPLE_NOTARY_ID }}
+          VN_NOTARY_PASSWORD: ${{ env.APPLE_NOTARY_PWD }}
+          VN_NOTARY_TEAM_ID: ${{ env.APPLE_TEAM_ID }}
 
       - name: Locate DMG
         id: dmg
@@ -136,7 +159,7 @@ jobs:
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AgeniusNoteLite-macOS-${{ matrix.arch }}
+          name: AgeniusNoteLite-macOS
           path: dist-build-mac-*/*.dmg
 
       - name: Attach to release

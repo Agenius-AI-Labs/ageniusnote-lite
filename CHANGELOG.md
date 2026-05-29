@@ -4,6 +4,26 @@ All notable changes to AgeniusNote Lite are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-05-27
+
+### Changed
+- **Mouse buttons show friendly names in the UI.** The side buttons now display as "Back" and "Forward" (and "Middle"/"Left"/"Right") in Settings and the status bar, instead of the internal `x1`/`x2` tokens. Stored/configured values are unchanged.
+
+## [1.0.6] - 2026-05-27
+
+### Fixed
+- **Windows mouse-button suppression didn't actually block the button.** Binding the back/forward side button as the trigger fired dictation but the browser still navigated, because the `win32_event_filter` only returned `False` (which just skips pynput's own click dispatch) without calling `suppress_event()`. The filter now calls `suppress_event()`, so pynput's hook proc returns non-zero and Windows drops the click. Bound button is consumed; every other click passes through.
+- **Auto-paste silently stopped working when device was `auto`/`cuda` on a CPU-only build.** A CUDA transcribe that fell back to CPU still produced a valid transcript, but `_on_transcribed` returned early on the fallback and never reached the paste call, so the text only landed on the clipboard. The fallback now annotates the status line ("CPU fallback") and falls through to the normal paste/copy path. Most visible on Windows, where the shipped installer is CPU-only and a saved `device: "auto"` setting triggered the fallback every time.
+- **Windows model download crashed on first run with "'NoneType' object has no attribute 'write'".** The PyInstaller windowed build runs with no console, so `sys.stdout`/`sys.stderr` are `None`. The first-run Whisper model download streams tqdm progress to `sys.stderr`, which then blew up before the model finished downloading, so dictation never worked on a fresh install. The missing streams are now redirected to the null device at startup. Only affected the first launch (before the model was cached).
+- **macOS keyboard hotkey crashed and didn't survive ad-hoc signing.** The global keyboard hotkey now uses Carbon `RegisterEventHotKey` via ctypes on macOS instead of pynput. pynput's macOS listener uses a Quartz event tap (needs Accessibility, which macOS keys to the code signature, so ad-hoc rebuilds lose the grant) and calls `TSMGetInputSourceProperty` from a background thread, which macOS 26 asserts must be the main dispatch queue and SIGTRAPs the process. Carbon `RegisterEventHotKey` is the OS-level dispatcher used by Slack/iTerm: no Accessibility, no event tap, no background-thread crash. **Input Monitoring is no longer required for the keyboard hotkey.** Windows/Linux keep pynput.
+- **macOS auto-paste did nothing.** After dictation the transcript was copied to the clipboard but the Cmd+V never landed in the focused app. Root cause: the synthetic paste keystroke is silently dropped by macOS unless the app holds the **Accessibility** right, and the prior ad-hoc-signed builds made that permission grant unstable across launches. The paste is now posted via `CGEventPost` (CoreGraphics); `pynput.keyboard.Controller` hits the same macOS-26 TSM SIGTRAP as the hotkey, so it had to go. AgeniusNote Lite now probes `AXIsProcessTrusted` and shows a one-time prompt when auto-paste is attempted without Accessibility, then reports "Copied, grant Accessibility to auto-paste" instead of falsely claiming it pasted. Accessibility is now **optional**: without it, recording, transcription, and clipboard still work; only the auto-paste keystroke needs it. Proper Developer ID signing + notarization (below) stabilizes the grant so it sticks.
+
+### Added
+- **Apple notarization.** Builds can now be Developer ID signed with a hardened runtime and notarized end to end. `packaging/build.sh` gained codesign + `notarytool` + `stapler` steps (gated on `VN_SIGN_IDENTITY` and notary credentials), with a matching `packaging/entitlements.plist`. The GitHub Actions release workflow imports a Developer ID cert from secrets and signs + notarizes tagged releases. Notarized DMGs install without the Gatekeeper "unidentified developer" block, so the `xattr -dr com.apple.quarantine` workaround is no longer needed.
+- **In-app Settings menu.** A gear button opens a settings dialog where you program the keyboard shortcut and the mouse button by pressing them (capture-by-press, so any key combo or mouse button works), plus pick the mouse mode, model, and device. Settings persist to `settings.json` in the per-user app folder and rebind live without a restart, so the installer/.app builds are configurable without setting environment variables. Saved settings take precedence over the `VN_LITE_*` env vars; env still seeds first run.
+- **Optional mouse-button hotkey.** Set `VN_LITE_MOUSE_BUTTON` (`x1`/`back`, `x2`/`forward`, or `middle`) to trigger dictation from a mouse button. `VN_LITE_MOUSE_MODE` picks `toggle` (click to start, click to stop, matching the keyboard hotkey) or `hold` (push-to-talk: press to record, release to transcribe). Off by default, so normal clicks are never intercepted.
+- **Mouse-button suppression.** When a mouse button is bound, its normal action is blocked while in use, so binding the forward/back side buttons no longer also navigates the browser. Selective and per-button: only the bound button is consumed, every other click passes through. Toggle it with the "Block the button's normal action" checkbox in Settings or `VN_LITE_MOUSE_SUPPRESS` (default on). Implemented via pynput's `win32_event_filter` on Windows and `darwin_intercept` on macOS.
+
 ## [1.0.3] - 2026-05-25
 
 ### Fixed
@@ -55,6 +75,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 - macOS DMG with Gatekeeper-friendly first-launch instructions.
 - Cyberpunk theme.
 
+[1.0.4]: https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.4
+[1.0.3]: https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.3
 [1.0.2]: https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.2
 [1.0.1]: https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.1
 [1.0.0]: https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.0

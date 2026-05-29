@@ -11,6 +11,23 @@
 #     - Python 3.11+ with project deps (see requirements.txt)
 #     - create-dmg  (brew install create-dmg)  -- optional, falls back to hdiutil
 #     - iconutil + sips (preinstalled on macOS)
+#
+# Signing + notarization (all optional; unset = unsigned build, prior behavior):
+#     VN_SIGN_IDENTITY    "Developer ID Application: Your Name (TEAMID)"
+#                         (list yours with: security find-identity -v -p codesigning)
+#   Notary auth, pick ONE:
+#     VN_NOTARY_PROFILE   name of a stored notarytool keychain profile, created once:
+#                           xcrun notarytool store-credentials NOTARY_PROFILE \
+#                             --apple-id you@example.com --team-id TEAMID \
+#                             --password <app-specific-password>
+#     -- or the Apple ID trio --
+#     VN_NOTARY_APPLE_ID  your Apple ID email
+#     VN_NOTARY_PASSWORD  an app-specific password (appleid.apple.com > Sign-In & Security)
+#     VN_NOTARY_TEAM_ID   your 10-char Developer Team ID
+#
+# Example signed + notarized build:
+#     VN_SIGN_IDENTITY="Developer ID Application: Michael Frostbutter (TEAMID)" \
+#     VN_NOTARY_PROFILE="agenius-notary" ./packaging/build.sh
 
 set -euo pipefail
 
@@ -89,6 +106,41 @@ if [[ ! -d "$APP" ]]; then
     exit 1
 fi
 
+# --- 1b. Codesign with Developer ID + hardened runtime ---
+# Gated on VN_SIGN_IDENTITY (e.g. "Developer ID Application: Name (TEAMID)").
+# When unset, we ship the prior ad-hoc/unsigned bundle unchanged.
+#
+# We must sign every Mach-O *inside* the bundle (PyInstaller ships hundreds of
+# .dylib/.so from pip wheels) bottom-up, then the .app last. Hardened runtime
+# (--options runtime) + a secure --timestamp are required for notarization.
+ENTITLEMENTS="packaging/entitlements.plist"
+if [[ -n "${VN_SIGN_IDENTITY:-}" ]]; then
+    echo ">> Codesigning with: ${VN_SIGN_IDENTITY}"
+    if [[ ! -f "$ENTITLEMENTS" ]]; then
+        echo "ERROR: $ENTITLEMENTS missing." >&2
+        exit 1
+    fi
+    SIGNED=0
+    while IFS= read -r -d '' f; do
+        if file "$f" | grep -q "Mach-O"; then
+            codesign --force --options runtime --timestamp \
+                --entitlements "$ENTITLEMENTS" \
+                --sign "$VN_SIGN_IDENTITY" "$f"
+            SIGNED=$((SIGNED + 1))
+        fi
+    done < <(find "$APP" -type f -print0)
+    echo ">> Signed ${SIGNED} nested Mach-O files"
+    # Sign the bundle itself last so its seal covers the freshly-signed contents.
+    codesign --force --options runtime --timestamp \
+        --entitlements "$ENTITLEMENTS" \
+        --sign "$VN_SIGN_IDENTITY" "$APP"
+    echo ">> Verifying signature..."
+    codesign --verify --deep --strict --verbose=2 "$APP"
+    echo ">> Signature OK"
+else
+    echo ">> VN_SIGN_IDENTITY not set; skipping codesign (ad-hoc/unsigned build)"
+fi
+
 # --- 2. Package .dmg ---
 # ARCH suffix lets us ship separate Apple Silicon and Intel DMGs to the same release.
 # Set ARCH=arm64 or ARCH=x86_64 via env; defaults to the host arch.
@@ -128,12 +180,50 @@ else
     rm -rf "$STAGING"
 fi
 
-if [[ -f "$DMG_OUT" ]]; then
-    SIZE_MB=$(du -m "$DMG_OUT" | awk '{print $1}')
-    echo ">> SUCCESS"
-    echo "   DMG:  $DMG_OUT"
-    echo "   Size: ${SIZE_MB} MB"
-else
+if [[ ! -f "$DMG_OUT" ]]; then
     echo ">> Build finished but DMG not found at expected path: $DMG_OUT" >&2
     exit 1
 fi
+
+# --- 3. Notarize + staple ---
+# Auth via either a stored notarytool keychain profile (VN_NOTARY_PROFILE,
+# created once with `xcrun notarytool store-credentials`) or the Apple ID trio
+# (VN_NOTARY_APPLE_ID + VN_NOTARY_PASSWORD app-specific pw + VN_NOTARY_TEAM_ID).
+# Skipped silently if neither is set, so unsigned local builds still finish.
+if [[ -n "${VN_NOTARY_PROFILE:-}" || -n "${VN_NOTARY_APPLE_ID:-}" ]]; then
+    if [[ -z "${VN_SIGN_IDENTITY:-}" ]]; then
+        echo "ERROR: notarization requested but VN_SIGN_IDENTITY was not set, so the bundle is unsigned. Set the signing identity and rebuild." >&2
+        exit 1
+    fi
+    if [[ -n "${VN_NOTARY_PROFILE:-}" ]]; then
+        NOTARY_AUTH=(--keychain-profile "$VN_NOTARY_PROFILE")
+    else
+        NOTARY_AUTH=(--apple-id "$VN_NOTARY_APPLE_ID" --password "$VN_NOTARY_PASSWORD" --team-id "$VN_NOTARY_TEAM_ID")
+    fi
+    echo ">> Submitting $DMG_OUT to Apple notary service (this can take a few minutes)..."
+    # notarytool exits 0 even when the verdict is Invalid, so capture the output
+    # and require "status: Accepted" before stapling. A ticket only exists for an
+    # accepted submission; stapling an Invalid one fails with "no ticket found"
+    # and (worse) leaves you guessing why. On failure, dump the rejection log.
+    SUBMIT_OUT="$(xcrun notarytool submit "$DMG_OUT" "${NOTARY_AUTH[@]}" --wait 2>&1)"
+    echo "$SUBMIT_OUT"
+    if echo "$SUBMIT_OUT" | grep -q "status: Accepted"; then
+        echo ">> Stapling ticket to DMG..."
+        xcrun stapler staple "$DMG_OUT"
+        xcrun stapler validate "$DMG_OUT"
+        echo ">> Notarized + stapled"
+    else
+        echo "ERROR: notarization did not return 'Accepted'. DMG is signed but not notarized." >&2
+        SUBMISSION_ID="$(echo "$SUBMIT_OUT" | awk '/id:/{print $2; exit}')"
+        [[ -n "$SUBMISSION_ID" ]] && xcrun notarytool log "$SUBMISSION_ID" "${NOTARY_AUTH[@]}" >&2 || true
+        exit 1
+    fi
+else
+    echo ">> Notary creds not set; skipping notarization."
+    echo "   To notarize: set VN_NOTARY_PROFILE, or VN_NOTARY_APPLE_ID + VN_NOTARY_PASSWORD + VN_NOTARY_TEAM_ID."
+fi
+
+SIZE_MB=$(du -m "$DMG_OUT" | awk '{print $1}')
+echo ">> SUCCESS"
+echo "   DMG:  $DMG_OUT"
+echo "   Size: ${SIZE_MB} MB"

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for AgeniusNote Lite.
+
+  Why each one:
+  - disable-library-validation: PyInstaller bundles native .dylib/.so from pip
+    wheels (PySide6, ctranslate2, onnxruntime, av, sounddevice) that are not
+    signed by our Developer ID. Without this, the hardened runtime refuses to
+    load them and the app crashes on launch. This is mandatory for any
+    PyInstaller/embedded-Python app.
+  - allow-unsigned-executable-memory + allow-jit: CPython and ctranslate2 use
+    executable memory the hardened runtime would otherwise block.
+  - device.audio-input: microphone capture for dictation.
+  - automation.apple-events: we use AppleEvents (osascript) to detect and
+    re-activate the focused app before auto-pasting the transcription.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>
