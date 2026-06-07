@@ -4,6 +4,11 @@ All notable changes to AgeniusNote Lite are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+- **Prebuilt Intel Mac DMG is no longer planned** (2026-06-07 decision). The v1.0.1 changelog promised an Intel DMG "as soon as a runner becomes available"; that runner never came back. GitHub has since retired its free Intel macOS runners entirely, Apple has announced macOS 26 Tahoe is the final release for Intel Macs, and no Intel request has been filed against this repo. Intel remains supported via build-from-source (the `ARCH=x86_64` path in `packaging/build.sh` still works), and a single filed issue from a blocked Intel user is the trigger for a one-off signed Intel build.
+
 ## [1.0.7] - 2026-05-27
 
 ### Changed
@@ -60,7 +65,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 - Mac DMG naming now includes the architecture suffix. Old `AgeniusNoteLite-Setup-x.y.z.dmg` is replaced by `AgeniusNoteLite-Setup-x.y.z-arm64.dmg`.
 
 ### Known limitations
-- **Intel Mac DMG not attached to this release.** GitHub Actions' macos-13 Intel runner pool failed to assign a runner within 65+ minutes after the tag push, so the Intel build was canceled. Apple Silicon Mac users are unaffected. The build path is wired and ready; we'll attach `AgeniusNoteLite-Setup-1.0.1-x86_64.dmg` to this release as soon as a runner becomes available. Track [the v1.0.1 release page](https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.1) or file an issue if you're blocked on Intel.
+- **Intel Mac DMG not attached to this release.** GitHub Actions' macos-13 Intel runner pool failed to assign a runner within 65+ minutes after the tag push, so the Intel build was canceled. Apple Silicon Mac users are unaffected. The build path is wired and ready; we'll attach `AgeniusNoteLite-Setup-1.0.1-x86_64.dmg` to this release as soon as a runner becomes available. Track [the v1.0.1 release page](https://github.com/Agenius-AI-Labs/ageniusnote-lite/releases/tag/v1.0.1) or file an issue if you're blocked on Intel. *(Update 2026-06-07: prebuilt Intel DMGs are no longer planned; see the Unreleased section at the top. Build-from-source remains supported on Intel.)*
 
 ## [1.0.0] - 2026-05-16
 

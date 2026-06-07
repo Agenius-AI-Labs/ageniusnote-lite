@@ -21,7 +21,7 @@ Grab the latest release from the [Releases](https://github.com/Agenius-AI-Labs/a
 
 1. Download the DMG for your Mac:
    - **Apple Silicon (M1/M2/M3/M4):** `AgeniusNoteLite-Setup-x.y.z-arm64.dmg`
-   - **Intel:** see [CHANGELOG.md](CHANGELOG.md) under v1.0.1 "Known limitations". The Intel build path is wired and ready; the DMG will be attached to the v1.0.1 release page as soon as a GitHub Actions Intel runner becomes available. If you need Intel sooner, build from source (see below) or file an issue.
+   - **Intel:** no prebuilt Intel DMG is planned. GitHub retired its free Intel macOS runners, and Apple has announced macOS 26 Tahoe is the final release for Intel Macs, so demand is winding down. Intel Macs are still supported via [build from source](#build-from-source) (works today). If you're on Intel and blocked, [file an issue](https://github.com/Agenius-AI-Labs/ageniusnote-lite/issues); a real request is exactly what would get a one-off Intel build onto the release page.
 2. Open the DMG, drag `AgeniusNote Lite.app` into `Applications`.
 3. **First launch:** notarized releases (v1.0.4+) open with a normal double-click. (Older, un-notarized builds were blocked by Gatekeeper; if you hit that on an older DMG, right-click → Open the first time, or run `xattr -dr com.apple.quarantine "/Applications/AgeniusNote Lite.app"`.)
 4. macOS permissions — what you need and when:
